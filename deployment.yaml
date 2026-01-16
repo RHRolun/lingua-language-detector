@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lingua-detector
+  labels:
+    app: lingua-detector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lingua-detector
+  template:
+    metadata:
+      labels:
+        app: lingua-detector
+    spec:
+      containers:
+        - name: lingua-detector
+          image: quay.io/YOUR_REPO/lingua-detector:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lingua-detector
+  labels:
+    app: lingua-detector
+spec:
+  selector:
+    app: lingua-detector
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: lingua-detector
+  labels:
+    app: lingua-detector
+spec:
+  to:
+    kind: Service
+    name: lingua-detector
+  port:
+    targetPort: 8080
