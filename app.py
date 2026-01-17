@@ -10,8 +10,22 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Lingua Language Detector")
 
-# Build detector once at startup
-detector = LanguageDetectorBuilder.from_all_languages().build()
+# Exclude languages that cause false positives on short English text
+EXCLUDED_LANGUAGES = [
+    Language.SHONA,
+    Language.XHOSA,
+    Language.SOTHO,
+    Language.TSONGA,
+    Language.TSWANA,
+    Language.GANDA,
+]
+
+# Build detector from all languages except excluded ones
+supported_languages = [lang for lang in Language.all() if lang not in EXCLUDED_LANGUAGES]
+detector = LanguageDetectorBuilder.from_languages(*supported_languages).build()
+
+# Minimum confidence threshold for a detection to be considered valid
+MIN_CONFIDENCE_THRESHOLD = 0.1
 
 
 # Request/Response schemas matching guardrails-detectors
@@ -38,19 +52,42 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
     Returns detection only if text is non-English.
     """
     if not text or not text.strip():
+        logger.debug(f"Empty text, skipping detection")
         return []
+
+    # Get confidence values for all languages to understand the detection
+    confidence_values = detector.compute_language_confidence_values(text)
+    top_languages = sorted(confidence_values, key=lambda x: x.value, reverse=True)[:5]
+    logger.info(f"Text: '{text}' | Top languages: {[(l.language.name, round(l.value, 3)) for l in top_languages]}")
 
     # Detect the primary language
     detected_lang = detector.detect_language_of(text)
+    logger.info(f"Detected language: {detected_lang.name if detected_lang else 'None'}")
 
-    # If can't detect or it's English, allow it (no detection)
-    if detected_lang is None or detected_lang == Language.ENGLISH:
+    # If can't detect, allow it
+    if detected_lang is None:
+        logger.info(f"No language detected")
         return []
 
-    # Non-English detected - return detection
+    # Get confidence scores
     english_confidence = detector.compute_language_confidence(text, Language.ENGLISH)
+    detected_confidence = detector.compute_language_confidence(text, detected_lang)
+
+    # If detected language confidence is below threshold, treat as uncertain
+    if detected_confidence < MIN_CONFIDENCE_THRESHOLD:
+        logger.info(f"Detected {detected_lang.name} but confidence {detected_confidence:.3f} < {MIN_CONFIDENCE_THRESHOLD}, ignoring")
+        return []
+
+    # If English, allow it
+    if detected_lang == Language.ENGLISH:
+        logger.info(f"English detected (conf: {english_confidence:.3f}), allowing")
+        return []
+
+    # Non-English detected with sufficient confidence - return detection
     # Score = how "non-English" the text is (higher = more likely to block)
     score = 1.0 - english_confidence
+
+    logger.info(f"Non-English detected: {detected_lang.name} (conf: {detected_confidence:.3f}) vs English (conf: {english_confidence:.3f})")
 
     return [ContentAnalysisResponse(
         start=0,
