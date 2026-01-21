@@ -108,6 +108,9 @@ def detect_language(text: str) -> List[ContentAnalysisResponse]:
         else:
             logger.info(f"Blocking '{text}'")
             detected_lang = detector.detect_language_of(text)
+            if detected_lang is None:
+                logger.info(f"Text: '{text}' | No language detected")
+                return []
             score = 1.0 - avg_english_prob
             resp = [ContentAnalysisResponse(
                 start=0,
