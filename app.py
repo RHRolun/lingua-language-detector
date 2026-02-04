@@ -1,12 +1,13 @@
+import asyncio
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Request
-from pydantic import BaseModel, Field
-from lingua import Language, LanguageDetectorBuilder
-import re
 from fast_langdetect import detect as fast_detect
+from lingua import Language, LanguageDetectorBuilder
+from pydantic import BaseModel, Field
 
 # Configure logging level from environment variable (default: INFO)
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -210,22 +211,32 @@ def health():
 
 
 @app.post("/api/v1/text/contents", response_model=List[List[ContentAnalysisResponse]])
-def analyze_contents(request: ContentAnalysisHttpRequest):
+async def analyze_contents(request: ContentAnalysisHttpRequest):
     """
-    Analyze text contents for language detection.
+    Analyze text contents for language detection asynchronously.
     Returns empty array for each content that is English.
     Returns detection for non-English content.
+    Offloads CPU-bound detection to thread pool to handle many parallel requests.
     """
-    results = []
-    for content in request.contents:
-        try:
-            results.append(detect_language(content))
-        except Exception as e:
-            # If detect_language itself fails (should be rare with internal error handling),
-            # return empty list for this content item
-            logger.error(f"Critical error processing content '{content}': {e}")
-            results.append([])
-    return results
+    # Process all contents concurrently (even if typically just one per request)
+    tasks = [
+        asyncio.to_thread(detect_language, content)
+        for content in request.contents
+    ]
+
+    # Gather results, capturing any exceptions
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Handle exceptions
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Critical error processing content '{request.contents[i]}': {result}")
+            processed_results.append([])
+        else:
+            processed_results.append(result)
+
+    return processed_results
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
